@@ -1,0 +1,19 @@
+# 입력 논문 / 번역 산출물 (용량 크고 저작물)
+/input/
+/output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 환경변수
+.env
+
+# macOS
+.DS_Store
+
+# Claude Code 로컬 설정
+.claude/settings.local.json
