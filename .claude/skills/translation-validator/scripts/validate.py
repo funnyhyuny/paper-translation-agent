@@ -39,6 +39,10 @@ def strip_for_length(text: str) -> str:
     text = BLOCK_MATH_PATTERN.sub("", text)
     text = INLINE_MATH_PATTERN.sub("", text)
     text = IMAGE_PATTERN.sub("", text)
+    # 스캔본 OCR은 표 셀을 공백으로 길게 패딩한다. 그대로 세면 원문 길이가
+    # 부풀어 정상 번역이 '누락'으로 잡히므로 연속 공백을 하나로 접는다.
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 

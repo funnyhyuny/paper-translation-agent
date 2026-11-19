@@ -42,3 +42,7 @@ mkdir -p input output  # 작업 폴더 생성
 최종 산출물은 `output/<논문명>_KR.pdf`, 중간 산출물은 `output/<논문명>_review/`에 저장됩니다.
 
 > `input/`, `output/`은 저장소에서 제외되어 있습니다.
+
+## Mac 앱 (ILOVEYELIN2)
+
+터미널 없이 쓰는 M1 이상 Mac용 앱입니다. `bash app/build.sh`로 `app/dist/ILOVEYELIN2.zip`을 만듭니다. 첫 실행 때 앱이 필요한 도구를 설치하고, 이후 `문서/ILOVEYELIN2/input`에 PDF를 넣으면 `output`에 번역본이 나옵니다. 설계는 `docs/superpowers/specs/2026-11-05-iloveyelin2-app-design.md`, 테스트는 `python3 -m unittest discover -s app/tests`로 실행합니다.

@@ -17,3 +17,8 @@ venv/
 
 # Claude Code 로컬 설정
 .claude/settings.local.json
+
+# 브레인스토밍 시안 / 앱 빌드 산출물
+.superpowers/
+app/build/
+app/dist/

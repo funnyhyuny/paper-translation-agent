@@ -16,6 +16,7 @@ import fitz  # PyMuPDF
 GRID_COLS = 3
 GRID_ROWS = 3
 THUMB_DPI = 100  # 썸네일 해상도
+JPEG_QUALITY = 70  # 썸네일 JPEG 압축 품질
 
 
 def main():
@@ -52,7 +53,8 @@ def main():
             )
             page = src_doc.load_page(idx)
             pix = page.get_pixmap(dpi=THUMB_DPI)
-            sheet.insert_image(rect, pixmap=pix)
+            # 픽스맵을 그대로 넣으면 무압축으로 삽입되어 파일이 수백 MB가 된다.
+            sheet.insert_image(rect, stream=pix.tobytes("jpeg", jpg_quality=JPEG_QUALITY))
             # 페이지 번호 라벨
             sheet.insert_text(
                 (c * cell_w + 8, r * cell_h + 12),
@@ -60,7 +62,7 @@ def main():
                 fontsize=8,
             )
 
-    out_doc.save(dst)
+    out_doc.save(dst, deflate=True, garbage=4)
     out_doc.close()
     src_doc.close()
     print(f"OK thumbnail={dst}")

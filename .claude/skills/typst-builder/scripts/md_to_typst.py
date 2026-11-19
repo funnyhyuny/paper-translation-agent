@@ -58,9 +58,14 @@ def convert_inline(text: str) -> str:
     # 앞에 백슬래시가 붙은 \$ (금액 표기)는 구분자가 아니므로 제외한다.
     text = re.sub(
         r"(?<!\\)\$((?:\\\$|[^$\n])+?)(?<!\\)\$",
-        lambda m: hold("$" + convert_math(m.group(1)) + "$"),
+        lambda m: hold(inline_math(m.group(1))),
         text,
     )
+
+    # 백슬래시로 이스케이프된 문자(\* \_ 등)는 강조 구분자가 아니다.
+    # 교재 본문이 별표 자체를 설명하는 대목("별표 \*를 붙인다")에서
+    # 이걸 강조 시작으로 읽으면 구분자 짝이 어긋나 컴파일이 깨진다.
+    text = re.sub(r"\\([*_`~#$\[\]()])", lambda m: hold("\\" + m.group(1)), text)
 
     # bold **x** → *x* : 이탤릭 규칙이 다시 매칭하지 않도록 플레이스홀더 경유
     text = re.sub(r"\*\*([^*\n]+?)\*\*", lambda m: hold(f"#strong[{m.group(1)}]"), text)
@@ -93,7 +98,28 @@ def convert_inline(text: str) -> str:
         r"\1\\\2",
         text,
     )
+    # mitex 인라인 수식 #mi(`...`) 뒤의 괄호도 같은 이유로 이스케이프한다.
+    text = re.sub(r"(#mi\(`[^`]*`\))([(\[])", r"\1\\\2", text)
     return text
+
+
+# 수식 엔진: "native"는 convert_math로 LaTeX를 Typst 문법으로 옮기고,
+# "mitex"는 LaTeX를 그대로 @preview/mitex 패키지에 넘긴다. 분수·이항계수·
+# \mathbb·\hat 등 수식이 많은 문서는 native 변환이 따라가지 못하므로 mitex를 쓴다.
+MATH_ENGINE = "native"
+MITEX_IMPORT = '#import "@preview/mitex:0.2.6": mi, mitex'
+
+
+def inline_math(latex: str) -> str:
+    if MATH_ENGINE == "mitex":
+        return f"#mi(`{latex.strip()}`)"
+    return "$" + convert_math(latex) + "$"
+
+
+def block_math(latex: str) -> str:
+    if MATH_ENGINE == "mitex":
+        return f"#mitex(`{latex.strip()}`)"
+    return f"$ {convert_math(latex)} $"
 
 
 def convert_math(m: str) -> str:
@@ -106,6 +132,12 @@ def convert_math(m: str) -> str:
     """
     m = re.sub(r"\^\{([^{}]*)\}", r"^(\1)", m)
     m = re.sub(r"_\{([^{}]*)\}", r"_(\1)", m)
+    # \cmd{arg} 형태의 LaTeX 서식 명령 → Typst 함수 호출
+    for cmd in ("underline", "overline", "mathrm", "mathbf", "mathit", "emph"):
+        typ = {"mathrm": "upright", "mathbf": "bold", "mathit": "italic",
+               "emph": "emph"}.get(cmd, cmd)
+        m = re.sub(r"\\" + cmd + r"\{([^{}]*)\}", typ + r"(\1)", m)
+
     for cmd in ("times", "approx", "div", "cdot", "leq", "geq", "neq", "pm", "infinity"):
         m = m.replace("\\" + cmd, cmd)
     m = re.sub(r"(?<!\\)\$", r"\\$", m)  # 수식 내부의 맨 달러 기호 이스케이프
@@ -120,6 +152,7 @@ def convert_math(m: str) -> str:
         "times", "approx", "div", "cdot", "leq", "geq", "neq", "pm", "infinity",
         "frac", "sqrt", "log", "ln", "exp", "sin", "cos", "tan", "max", "min",
         "sum", "prod", "dots", "text", "upright", "abs", "floor", "ceil",
+        "underline", "overline", "bold", "italic", "emph",
     }
     m = re.sub(
         r"(?<![\\\"A-Za-z0-9])[A-Za-z]{2,}(?![A-Za-z0-9\"])",
@@ -195,6 +228,18 @@ def image_size(path: str) -> tuple[int, int] | None:
     return None
 
 
+
+QUOTE_RE = re.compile(r"^\s*>\s?")
+
+
+def convert_quote(body: str) -> str:
+    """마크다운 인용 블록 -> 왼쪽 세로줄이 있는 Typst 블록."""
+    return (
+        "#block(width: 100%, inset: (left: 0.9em, y: 0.4em), "
+        "stroke: (left: 2.5pt + luma(150)))[\n" + body + "\n]"
+    )
+
+
 def convert_image(alt: str, path: str) -> str:
     """이미지 → #figure. 원본 픽셀 크기에 비례한 폭으로 배치한다.
 
@@ -214,6 +259,12 @@ def convert_image(alt: str, path: str) -> str:
 
 
 BULLET_RE = re.compile(r"^\s*(?:[-•▪·*\u2022]|\d+[.)])\s*\S")
+# 이보다 짧은 조각만으로 이루어진 셀은 줄바꿈이 의도된 목록으로 본다
+LIST_FRAGMENT_MAX = 30
+# 병기 시작을 알리는 조각은 긴 셀에서도 줄을 바꾼다.
+# 화살표·괄호는 무조건, 한국어는 앞 조각이 영어일 때만(영->한 병기).
+GLOSS_RE = re.compile(r"^\s*(?:→|\()")
+HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 
 
 def reflow_cell(cell: str) -> str:
@@ -227,6 +278,13 @@ def reflow_cell(cell: str) -> str:
     parts = [p for p in parts if p]
     if not parts:
         return ""
+
+    # 번역본의 <br>는 대부분 의도적이다: 낱말 목록(furthermore / in addition)이나
+    # 영한 병기(Addition / (첨가)). 조각이 모두 짧으면 목록으로 보고 줄바꿈을
+    # 그대로 살린다. 긴 산문 조각이 섞여 있을 때만 OCR 줄바꿈으로 보고 잇는다.
+    if max(len(x) for x in parts) <= LIST_FRAGMENT_MAX:
+        return "<br>".join(parts)
+
     out = ""
     pending = ""  # 기호만 따로 떨어진 불릿을 다음 조각에 붙인다
     for frag in parts:
@@ -238,7 +296,11 @@ def reflow_cell(cell: str) -> str:
             pending = ""
         elif not out:
             out = frag
-        elif BULLET_RE.match(frag):
+        elif (
+            BULLET_RE.match(frag)
+            or GLOSS_RE.match(frag)
+            or (HANGUL_RE.search(frag[:4]) and not HANGUL_RE.search(out[-40:]))
+        ):
             out += "<br>" + frag
         else:
             out += " " + frag
@@ -365,8 +427,7 @@ def convert_markdown(md: str) -> str:
             # 한 줄 내 종결 여부
             stripped = line.strip()
             if stripped.endswith("$$") and len(stripped) > 2 and stripped != "$$":
-                content = convert_math(stripped[2:-2])
-                out.append(f"$ {content} $")
+                out.append(block_math(stripped[2:-2]))
                 i += 1
                 continue
             # 다중 라인
@@ -375,8 +436,7 @@ def convert_markdown(md: str) -> str:
             while i < len(lines) and not lines[i].strip().endswith("$$"):
                 block.append(lines[i])
                 i += 1
-            content = convert_math("\n".join(block))
-            out.append(f"$ {content} $")
+            out.append(block_math("\n".join(block)))
             i += 1
             continue
 
@@ -419,6 +479,28 @@ def convert_markdown(md: str) -> str:
             out.append(convert_table(block))
             continue
 
+        # 인용 블록 — 번역 병기(`> **[번역]** ...`)에 쓰인다.
+        # 처리 분기가 없으면 '>' 기호가 PDF에 그대로 노출된다.
+        if QUOTE_RE.match(line):
+            block = []
+            while i < len(lines):
+                if QUOTE_RE.match(lines[i]):
+                    block.append(QUOTE_RE.sub("", lines[i]))
+                    i += 1
+                elif not lines[i].strip() and any(
+                    QUOTE_RE.match(l) for l in lines[i + 1:i + 2]
+                ):
+                    block.append("")      # 인용 안의 문단 구분
+                    i += 1
+                else:
+                    break
+            body = []
+            for b in block:
+                c = convert_inline(b) if b.strip() else ""
+                body.append(re.sub(r"^(\s*)=", r"\1\\=", c))
+            out.append(convert_quote("\n".join(body)))
+            continue
+
         # 리스트
         m = re.match(r"^(\s*)[-*]\s+(.+)$", line)
         if m:
@@ -436,7 +518,11 @@ def convert_markdown(md: str) -> str:
             continue
 
         # 일반 텍스트 (인라인 변환)
-        out.append(convert_inline(line))
+        converted = convert_inline(line)
+        # Typst는 줄머리 `=`를 헤딩 마커로 읽는다. 교재의 수식 연결줄
+        # (`=  $\$70 times 8.2442$`)이 거대한 제목으로 조판되므로 이스케이프한다.
+        converted = re.sub(r"^(\s*)=", r"\1\\=", converted)
+        out.append(converted)
         i += 1
 
     return "\n".join(out)
@@ -451,9 +537,13 @@ def main():
     p.add_argument("--meta-authors", default="")
     p.add_argument("--meta-source", default="")
     p.add_argument("--meta-translation-date", default=dt.date.today().isoformat())
+    p.add_argument("--mitex", action="store_true",
+                   help="LaTeX 수식을 mitex 패키지로 그대로 렌더링")
     args = p.parse_args()
 
-    global MD_DIR
+    global MD_DIR, MATH_ENGINE
+    if args.mitex:
+        MATH_ENGINE = "mitex"
     MD_DIR = args.input.resolve().parent
     md_text = args.input.read_text(encoding="utf-8")
     body_typst = convert_markdown(md_text)
@@ -465,7 +555,8 @@ def main():
     )
     template_path = os.path.relpath(template_abs, args.output.resolve().parent)
 
-    output = f"""#import "{template_path}": paper
+    extra_import = f"\n{MITEX_IMPORT}" if args.mitex else ""
+    output = f"""#import "{template_path}": paper{extra_import}
 
 #show: paper.with(
   title: "{args.meta_title}",
